@@ -11,6 +11,7 @@
 #include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/pm.h>
+#include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/regulator/consumer.h>
@@ -405,6 +406,8 @@ static const struct snd_soc_dapm_route es8328_dapm_routes[] = {
 	{ "Right ADC", NULL, "ADC DIG" },
 
 	{ "Mic Bias", NULL, "Mic Bias Gen" },
+	{ "Left ADC", NULL, "Mic Bias" },	/* power mic bias during capture */
+	{ "Right ADC", NULL, "Mic Bias" },
 
 	{ "Left Line Mux", "Line 1", "LINPUT1" },
 	{ "Left Line Mux", "Line 2", "LINPUT2" },
@@ -797,6 +800,21 @@ static int es8328_component_probe(struct snd_soc_component *component)
 		goto clk_fail;
 	}
 
+	/* OPi5+: ES8328 powers up muted/min; set audible defaults for 3.5mm */
+	snd_soc_component_write(component, ES8328_LDACVOL, 0x00);	/* DAC L: 0 dB */
+	snd_soc_component_write(component, ES8328_RDACVOL, 0x00);	/* DAC R: 0 dB */
+	snd_soc_component_write(component, ES8328_LOUT1VOL, 0x1e);	/* HP L: ~0 dB */
+	snd_soc_component_write(component, ES8328_ROUT1VOL, 0x1e);	/* HP R: ~0 dB */
+	snd_soc_component_write(component, ES8328_LOUT2VOL, 0x1e);	/* SPK L: ~0 dB */
+	snd_soc_component_write(component, ES8328_ROUT2VOL, 0x1e);	/* SPK R: ~0 dB */
+
+	/* OPi5+ onboard mic: ES8388 shares one physical LRCK pin for ADC+DAC.
+	 * Mainline never sets DACCONTROL21 bit7 (SLRCK), so a capture-only
+	 * stream gets no ADC word clock and records silence.
+	 */
+	if (device_property_read_bool(component->dev, "everest,mic-lrck-same"))
+		snd_soc_component_update_bits(component, ES8328_DACCONTROL21, 0x80, 0x80);
+
 	return 0;
 
 clk_fail:
@@ -864,7 +882,7 @@ int es8328_probe(struct device *dev, struct regmap *regmap)
 		es8328->supplies[i].supply = supply_names[i];
 
 	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(es8328->supplies),
-				es8328->supplies);
+			es8328->supplies);
 	if (ret) {
 		dev_err(dev, "unable to get regulators\n");
 		return ret;
